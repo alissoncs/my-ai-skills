@@ -2,3 +2,4 @@
 __pycache__/
 *.pyc
 PyWhatKit_DB.txt
+db_connections.json

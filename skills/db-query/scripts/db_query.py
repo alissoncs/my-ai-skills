@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Run a SQL query against the Brumi MySQL/MariaDB database on Hostinger.
+"""Run a SQL query against any MySQL/MariaDB database, picked by name.
 
-Auth: reads DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME from the
-environment (or a --env-file). Requires `pip install pymysql`.
+Connections are defined once in a JSON config (default: db_connections.json
+next to this script) keyed by a short name, e.g.:
 
-Write queries (INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/TRUNCATE/REPLACE) are
-blocked unless --allow-write is passed, since this talks to a production
-database.
+    {
+      "brumi": {"host": "...", "port": 3306, "user": "...", "password": "...", "database": "..."},
+      "other_project": {"host": "...", "port": 3306, "user": "...", "password": "...", "database": "..."}
+    }
+
+Pick which one to use with --db <name>. Requires `pip install pymysql`.
 """
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -26,24 +28,28 @@ WRITE_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
-
-def load_env_file(path: Path) -> None:
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "db_connections.json"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Query the Brumi database on Hostinger.")
+    parser = argparse.ArgumentParser(description="Query a named MySQL/MariaDB database.")
+    parser.add_argument("--db", required=True, help="Connection name as defined in the config file")
     parser.add_argument("--query", help="SQL statement (mutually exclusive with --query-file)")
     parser.add_argument("--query-file", type=Path, help="Read the SQL statement from a file")
     parser.add_argument("--allow-write", action="store_true", help="Allow INSERT/UPDATE/DELETE/DDL statements")
     parser.add_argument("--format", choices=["table", "json"], default="table")
-    parser.add_argument("--env-file", type=Path, default=Path(".env"), help="Optional .env file with DB_* vars")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help=f"Path to the connections JSON file (default: {DEFAULT_CONFIG.name})")
+    parser.add_argument("--list", action="store_true", help="List the connection names defined in the config and exit")
     return parser.parse_args()
+
+
+def load_connections(config_path: Path) -> dict:
+    if not config_path.is_file():
+        sys.exit(
+            f"Config file not found: {config_path}\n"
+            "Create it from db_connections.example.json with your connection details."
+        )
+    return json.loads(config_path.read_text(encoding="utf-8"))
 
 
 def get_query(args: argparse.Namespace) -> str:
@@ -67,29 +73,31 @@ def print_table(rows: list[dict]) -> None:
 
 def main() -> None:
     args = parse_args()
+    connections = load_connections(args.config)
 
-    if args.env_file.is_file():
-        load_env_file(args.env_file)
+    if args.list:
+        for name in connections:
+            print(name)
+        return
 
-    required = ["DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME"]
-    missing = [key for key in required if not os.environ.get(key)]
-    if missing:
-        sys.exit(f"Missing env vars: {', '.join(missing)} (set them or use --env-file)")
+    if args.db not in connections:
+        sys.exit(f"Unknown --db '{args.db}'. Available: {', '.join(connections) or '(none configured)'}")
 
+    conn_info = connections[args.db]
     query = get_query(args).strip()
 
     if WRITE_KEYWORDS.match(query) and not args.allow_write:
         sys.exit(
             "Refusing to run a write/DDL statement without --allow-write. "
-            "This connects to a production database — confirm with the user first."
+            "Confirm with the user before running it against this database."
         )
 
     conn = pymysql.connect(
-        host=os.environ["DB_HOST"],
-        port=int(os.environ.get("DB_PORT", 3306)),
-        user=os.environ["DB_USER"],
-        password=os.environ["DB_PASSWORD"],
-        database=os.environ["DB_NAME"],
+        host=conn_info["host"],
+        port=int(conn_info.get("port", 3306)),
+        user=conn_info["user"],
+        password=conn_info["password"],
+        database=conn_info["database"],
         cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
     )

@@ -1,0 +1,9 @@
+{
+  "brumi": {
+    "host": "srv0000.hstgr.io",
+    "port": 3306,
+    "user": "u684629909_brumi",
+    "password": "your-password",
+    "database": "u684629909_brumi"
+  }
+}
